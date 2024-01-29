@@ -1,0 +1,38 @@
+
+ target C {
+    platform: {
+      name: "rp2040",
+      board: "pololu_3pi_2040_robot"
+    },
+    threading: false,
+  }
+  
+  import Display from "lib/Display.lf"
+  import AngleToDistance from "lib/AngleToDistance.lf"
+  
+  main reactor {
+    display = new Display()
+    distance = new AngleToDistance()
+  
+    timer t(0, 1s)
+  
+    reaction(t) -> distance.trigger {=
+      lf_set(distance.trigger, true);
+    =}
+  
+    reaction(startup) -> display.line0 {=
+      lf_set(display.line0, "Distance:");
+    =}
+  
+    reaction(distance.left) -> display.line1 {=
+      static char buf[17];
+      snprintf(buf, 17, "L: %d", distance.left->value);
+      lf_set(display.line1, buf);
+    =}
+    
+    reaction(distance.right) -> display.line2 {=
+      static char buf[17];
+      snprintf(buf, 17, "R: %d", distance.right->value);
+      lf_set(display.line2, buf); 
+    =}
+  }

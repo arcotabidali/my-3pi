@@ -1,0 +1,129 @@
+target C {
+    platform: {
+      name: "rp2040",
+      board: "pololu_3pi_2040_robot"
+    },
+    threading: false,
+  }
+  
+  import Display from "lib/Display.lf"
+  import Motors from "lib/Motors.lf"
+  import GyroAngle from "lib/IMU.lf"
+  import LineSensor from "HillLineDetectSolution.lf"
+
+
+  reactor Robot {
+    output notify:string   // Notify of mode change.
+    state turn_angle:int
+    state turn_direction:int //+1 for left direciton, -1 for right direction
+    state lineOnLeft:bool
+    state lineOnCenter:bool
+    state lineOnRight:bool
+
+    
+    lineSensor = new LineSensor()
+    motors = new Motors()
+
+    timer t(0, 10 ms)
+
+    reaction(startup) -> notify {=
+        lf_set(notify, "INIT:CALIBRATING");
+      =}
+
+    initial mode CALIBRATING 
+    {
+        reaction(lineSensor.left, lineSensor.center, lineSensor.right) -> reset(DRIVING), notify {=
+            lf_set_mode(DRIVING);
+            lf_set(notify, "DRIVING");
+        =}
+    }
+
+  mode DRIVING { 
+
+    reaction(reset) ->  motors.left_power, motors.right_power {=
+      lf_set(motors.left_power, 0.2);
+      lf_set(motors.right_power, 0.2);
+    =}
+
+    reaction(lineSensor.left, lineSensor.center, lineSensor.right) -> reset(LineDetect), notify {=
+
+      self->lineOnLeft = lineSensor.left->value;
+      self->lineOnCenter = lineSensor.center->value;
+      self->lineOnRight = lineSensor.right->value;
+        
+      if(self->lineOnLeft|| self->lineOnCenter || self->lineOnCenter)
+      {
+        lf_set_mode(LineDetect);
+        lf_set(notify, "LineDetect");
+      }
+    =}
+  }
+
+  mode LineDetect {
+    logical action turn    
+
+    reaction(reset) -> motors.left_power, motors.right_power, turn, reset(DRIVING), notify {=
+
+        lf_set(motors.left_power, -0.2);
+        lf_set(motors.right_power, -0.2);
+
+      if(self->lineOnCenter)
+      { 
+        self->turn_angle = 180;
+        self->turn_direction = 1;//direction doesn't matter
+        
+      }
+      else if(self->lineOnLeft)
+      { 
+        self->turn_angle = 20;
+        self->turn_direction = -1; //right
+      }
+      else if (self->lineOnRight)
+      {
+        self->turn_angle = 20;
+        self->turn_direction = 1; //right
+      }
+      else
+      {
+        //no line detected
+        lf_set_mode(DRIVING);
+        lf_set(notify, "DRIVING");
+      }
+
+      lf_schedule(turn, SEC(0.4));
+    =}
+ 
+    reaction(turn) -> reset(TURN), notify{=
+      lf_set_mode(TURN);
+      lf_set(notify, "TURN");
+    =}
+
+  }
+
+  mode TURN {
+    gyro = new GyroAngle()
+
+    reaction(reset) ->  motors.left_power, motors.right_power {=
+      lf_set(motors.left_power, self->turn_direction * -0.2);
+      lf_set(motors.right_power,self->turn_direction * 0.2);
+    =}
+
+    reaction(t) -> gyro.trigger {=
+      lf_set(gyro.trigger, true);
+    =}
+
+    reaction(gyro.z) -> reset(DRIVING), notify{=
+    if(abs(gyro.z->value) > self->turn_angle)
+    {   lf_set_mode(DRIVING);
+        lf_set(notify, "DRIVING");
+    }
+    =}
+  }  
+  }
+  
+  main reactor {
+    robot = new Robot()
+    display = new Display()
+    robot.notify -> display.line0;
+  }
+  

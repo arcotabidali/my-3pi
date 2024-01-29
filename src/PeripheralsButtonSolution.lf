@@ -1,0 +1,29 @@
+target C {
+    platform: "RP2040",
+    threading: false,
+}
+
+import Display from "lib/Display.lf"
+
+preamble{=
+    #include <hardware/gpio.h>
+=}
+
+ main reactor {
+    d = new Display()
+    timer t(0, 250 msec)
+    reaction(t) ->  d.line0, d.line1, d.line2 {=
+
+        bool Notpushed = gpio_get(PICO_DEFAULT_LED_PIN);
+        static char buf0[17];
+        if(Notpushed)
+        {
+            snprintf(buf0, 17, "%s", "Not Pushed");
+        }
+        else
+        {
+            snprintf(buf0, 17, "%s", "Pushed");
+        }
+        lf_set(d.line0, buf0);
+    =}
+}

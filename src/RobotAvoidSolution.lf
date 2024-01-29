@@ -1,0 +1,263 @@
+/**
+ * Template for robot driving lab exercises.
+ * This template just periodically switches between a
+ * STOPPED and a DRIVING mode, updating the LCD display
+ * on each change of mode.
+ */
+ target C {
+    platform: {
+      name: "rp2040",
+      board: "pololu_3pi_2040_robot"
+    },
+    threading: false,
+  }
+
+
+  
+  import Display from "lib/Display.lf"
+  import Motors from "lib/Motors.lf"
+  import GyroAngle from "lib/IMU.lf"
+  import AngleToDistance from "lib/AngleToDistance.lf"
+  import Bump from "lib/Bump.lf"
+
+  preamble{=
+    #define STOP 0
+    #define DRIVE 1
+    #define ROTATE 2
+    #define BUMPED 3
+  =}
+  
+  reactor Robot {
+    input drive:int       
+    input direction:int //+1 for forward, -1 for backward. -1 for left rotation, +1 for right rotation.
+    input travel:int //distance the bot will travel. 
+    input turn:int //angle to turn.
+    output newState: int //to let know that the state has been changed.
+    output notify:string   // Notify of mode change.
+    output bumpedLeft:bool
+    output bumpedRight:bool
+
+
+    motor = new Motors()
+    state power:float = 0.1
+   
+  
+    reaction(startup) -> notify {=
+        lf_set(notify, "INIT");
+      =}
+  
+    initial mode STOPPED {
+      reaction(drive, direction, turn) -> reset(DRIVING), reset(ROTATING),  notify, motor.left_power, motor.right_power {=
+        if (drive->value == DRIVE) {
+            lf_set_mode(DRIVING);
+            lf_set(notify, "DRIVING");
+            //code for moving
+            lf_set(motor.left_power, direction->value*self->power);
+            lf_set(motor.right_power, direction->value*self->power);
+        }
+        else if (drive->value == ROTATE) {
+            lf_set_mode(ROTATING);
+            lf_set(notify, "ROTATING");
+            //code for rotating.
+            lf_set(motor.left_power, direction->value * self->power);
+            lf_set(motor.right_power,  -1 * direction->value * self->power);
+        }
+      =}
+    }
+  
+    mode DRIVING { 
+
+      distance = new AngleToDistance()
+      bump = new Bump()
+      reset state initial_distance:int = 0
+      state distance_left:int
+
+      reaction(reset) -> distance.trigger {=
+        lf_set(distance.trigger, true);
+      =}
+
+      timer t1(0, 100 msec);
+
+      reaction(t1) -> distance.trigger {=
+         lf_set(distance.trigger, true);
+      =}
+  
+      reaction(distance.left, distance.right) -> STOPPED, notify, newState {=
+        if(self->initial_distance == 0)
+        {
+            self->initial_distance = (distance.left->value + distance.right->value)/2;
+        }
+
+        else 
+        {  
+            self->distance_left = travel->value - (distance.left->value + distance.right->value)/2 - initial_distance;
+            if(self->distance_left < 0)
+            {
+                lf_set_mode(STOPPED);
+                lf_set(notify, "STOPPED");
+                lf_set(newState, STOPPED);
+                lf_set(motor.left_power, 0.0);
+                lf_set(motor.right_power, 0.0);
+            }
+        }
+      =}
+
+      reaction(bump.left, bump.right) -> BUMPED {=
+                lf_set_mode(BUMPED);
+                lf_set(notify, "BUMPED");
+                lf_set(newState, BUMPED);
+                lf_set(motor.left_power, 0.0);
+                lf_set(motor.right_power, 0.0);
+                lf_set(blockedLeft, bump.left->value);
+                lf_set(blockedRight, bump.right->value)
+      =}
+    }
+
+    mode ROTATING {
+
+    angle = new GyroAngle()
+    reset state initial_angle:int = 0
+    reaction(reset) -> angle.trigger {=
+        lf_set(angle.trigger, true);
+    =}
+
+    timer t2(0, 100 msec)
+
+    reaction(t2) -> angle.trigger {=
+     lf_set(angle.trigger, true);
+    =}
+
+    reaction(angle.x) -> STOPPED {=
+        if(initial_angle == 0)
+        {
+            initial_angle->value = angle.x->value;
+        }
+        if(angle.x->value - initial_angle > turn )
+        {
+            //we have rotated determied degree, now enter stop state.
+            lf_set_mode(STOPPED);
+            lf_set(notify, "STOPPED");
+            lf_set(newState, STOP);
+            lf_set(motor.left_power, 0.0);
+            lf_set(motor.right_power, 0.0);
+        }
+      =}
+    }
+
+    mode BUMPED
+    {
+      reaction(drive) -> history(DRIVING)
+      {=
+        if (drive->value == DRIVE) {
+              lf_set_mode(DRIVING);
+              lf_set(notify, "DRIVING");
+              //code for moving
+          }
+      =}
+      
+    }
+    
+  }
+  
+  main reactor {
+    timer t(0, 100 msec)//response rate
+    state currentState:int = 0
+    state bumpedLeft:bool
+    state bumpedRight:bool
+    state driveCount:int = 0
+    state rotateCount:int = 0
+
+    state bumpedCurrentState:int = 0
+    state bumpedDriveCount:int = 0
+    state bumpedRotateCount:int = 0
+    state bumpedAgainLeft:bool 
+    state bumpedAgainRight:bool
+
+    robot = new Robot()
+    robot2 = new Robot();//when gets bumped will be used.
+    display = new Display()
+    bump = new Bump()
+
+   
+
+    reaction(t) -> robot.drive, robot.direction, robot.turn, robot.travel, robot2.drive, robot2.direction, robot2.turn, robot2.travel {=
+
+       if(self->currentState == STOP && self->rotateCount < self->driveCount)
+       {
+        //rotate right
+        lf_set(robot.drive,ROTATE);
+        lf_set(robot.direction, 1);
+        lf_set(robot.turn, 90);
+        self->rotateCount++;
+        self->currentState = ROTATE;
+       }
+       else if(self->currentState == STOP && self->driveCount < 4)
+       {
+        //moveForward
+        lf_set(robot.drive, DRIVE);
+        lf_set(robot.direction, 1);//forwad 
+        lf_set(robot.travel, 0.5);//0.5 meters
+        self->driveCount++;
+        self->currentState = DRIVE;
+       }
+       else if(self->bumpedCurrentState == BUMPED)
+       {
+          if(self->bumpedCurrentState == STOP && self->bumpedRotateCount < self->bumpedDriveCount)
+          {
+            //rotate right
+            lf_set(robot2.drive,ROTATE);
+
+            if(self->bumpedRotateCount == 0)
+              lf_set(robot2.direction, (blockedRight && !blockedLeft) ? -1 : 1);
+            else
+              lf_set(robot2.direction, (blockedRight && !blockedLeft) ? 1 : -1);
+
+            lf_set(robot2.turn, 90);
+            self->bumpedRotateCount++;
+            self->bumpedCurrentState = ROTATE;
+          }
+          else if(self->bumpedCurrentState == STOP && self->bumpedDriveCount < 2)
+          {
+         
+            lf_set(robot2.drive, DRIVE);
+            lf_set(robot2.direction, (self->umpedDriveCount==0)? -1 : 1 );//move back first then next time move forward
+            lf_set(robot2.travel, 0.1);//0.1 meters
+            self->bumpedDriveCount++;
+            self->bumpedCurrentState = DRIVE;
+          }
+          else if(self->bumpedCurrentState == BUMPED)
+          {
+            //we are bumped again do something
+
+
+          }
+          else if(self->bumpedCurrentState == STOP && self->bumpedDriveCount ==2 && self->bumpedRotateCount ==2)
+          {
+            //we recoverd from bumped state, return to robot1
+            lf_set(robot.drive, DRIVE); //how to make it as history.
+            self->bumpedDriveCount = 0;
+            self->bumpedRotateCount = 0;
+            self->bumpeCurrentState = STOP;
+            self->currentState = DRIVE;
+          }
+
+       }      
+    =}
+
+    reaction(robot.newState, robot.bumpedLeft, robot.bumpedRight){=
+        //here we update the currentState that has been changed in the modal reactor, robot.
+        self->currentState = robot.newState;
+        self->bumpedLeft = robot.bumpedLeft;
+        self->bumpedRight = robot.bumpedRight;
+    =}
+
+    reaction(robot2.newState, robot2.bumpedLeft, robot2.bumpedRight){=
+      //here we update the currentState that has been changed in the modal reactor, robot.
+      self->bumpedCurrentState = robot2.newState;
+      self->bumpedAgainLeft = robot2.bumpedLeft;
+      self->bumpeAgaindRight = robot2.bumpedRight;
+    =}
+        
+    robot.notify -> display.line0;
+  }
+  

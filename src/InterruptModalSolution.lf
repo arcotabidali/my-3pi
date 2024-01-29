@@ -1,0 +1,102 @@
+target C {
+    platform: {
+      name: "rp2040",
+      board: "pololu_3pi_2040_robot"
+    },
+    threading: false,
+    keepalive: true
+  }
+
+  import Display from "lib/Display.lf"
+
+  preamble {=
+    #include <stdio.h>
+    #include <pico/stdlib.h>
+    #include <hardware/gpio.h>
+  =}
+
+  reactor counter
+  {
+    
+    input trig : bool
+    d = new Display()
+    state counter : int = 0;
+
+    initial mode One {
+        //incrementing mode.
+        timer t1(0, 250 msec)
+        reaction(t1) -> d.line0 {=
+        self->counter++;
+        static char buf0[17];
+        snprintf(buf0, 17, "y:%2.4f", self->counter);
+        
+        lf_set(d.line0, buf0);
+        =}
+
+        reaction(trig) -> history(Two) {=
+            lf_set_mode(Two);
+        =}
+        
+    }
+    mode Two
+    {
+        //decrementing mode
+        timer t2(0, 500 msec)
+        reaction(t2) -> d.line0 {=
+        self->counter--;
+        static char buf0[17];
+        snprintf(buf0, 17, "y:%2.4f", self->counter);
+        
+        lf_set(d.line0, buf0); 
+        =}
+
+        reaction(trig) -> history(One) {=
+            lf_set_mode(One);
+        =}
+    }
+
+    
+
+
+
+
+  }
+
+
+
+main reactor {
+    preamble {=
+    static void* action;
+        void gpio_callback(uint gpio, uint32_t events) 
+        {
+            // Put the GPIO event(s) that just happened into event_str
+            // so we can print it
+            //instead of below option, one could have used the physical time for spacing.
+            lf_schedule(action, 0);
+        }
+
+    =}
+
+   
+    physical action a(0, 200 msec, "drop");
+    state currentMode: int = 1;
+    counter = new counter();
+
+    
+    
+    reaction(startup) -> a {=
+        //initialize the interrupt and pass the callback function
+        action = a;
+        gpio_set_irq_enabled_with_callback(PICO_DEFAULT_LED_PIN, GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
+
+    =}
+
+    reaction(a) -> counter.trig{=
+        
+        lf_set(counter.trig, true);
+          
+
+            
+    =} 
+
+}

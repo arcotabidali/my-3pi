@@ -1,0 +1,154 @@
+/**
+ * Template for robot driving lab exercises.
+ * This template just periodically switches between a
+ * STOPPED and a DRIVING mode, updating the LCD display
+ * on each change of mode.
+ */
+ target C {
+    platform: {
+      name: "rp2040",
+      board: "pololu_3pi_2040_robot"
+    },
+    threading: false,
+  }
+
+
+  
+  import Display from "lib/Display.lf"
+  import Motors from "lib/Motors.lf"
+  import GyroAngle from "lib/IMU.lf"
+  import AngleToDistance from "lib/AngleToDistance.lf"
+
+  preamble{=
+    #define STOP 0
+    #define DRIVE 1
+    #define ROTATE 2
+  =}
+  
+  reactor Robot {
+    input drive:int       
+    output notify:string   // Notify of mode change.
+    motor = new Motors()
+    state power:float = 0.1
+  
+    reaction(startup) -> notify {=
+      lf_set(notify, "INIT");
+    =}
+  
+    initial mode STOPPED {
+      reaction(drive) -> DRIVING, ROTATING,  notify, motor.left_power, motor.right_power {=
+        if (drive->value == DRIVE) {
+            lf_set_mode(DRIVING);
+            lf_set(notify, "DRIVING");
+            //code for moving
+            lf_set(motor.left_power, self->power);
+            lf_set(motor.right_power, self->power);
+        }
+        else if (drive->value == ROTATE) {
+          lf_set_mode(ROTATING);
+          lf_set(notify, "ROTATING");
+          //code for rotating.
+          lf_set(motor.left_power, self->power);
+          lf_set(motor.right_power, -1 * self->power);
+        }
+      =}
+    }
+  
+    mode DRIVING {
+      reaction(drive) -> STOPPED, ROTATING, notify, motor.left_power, motor.right_power {=
+        if (drive->value == ROTATE) {
+          lf_set_mode(ROTATING);
+          lf_set(notify, "ROTATING");
+          //code for rotating.
+          lf_set(motor.left_power, self->power);
+          lf_set(motor.right_power, -1 * self->power);
+        }
+        else if (drive->value == STOP)
+        {
+            lf_set_mode(STOPPED);
+            lf_set(notify, "STOPPED");
+            lf_set(motor.left_power, 0.0);
+            lf_set(motor.right_power, 0.0);
+        }
+      =}
+    }
+
+    mode ROTATING {
+        reaction(drive) -> STOPPED, DRIVING, notify, motor.left_power, motor.right_power {=
+            if (drive->value == DRIVING) {
+              lf_set_mode(DRIVING);
+              lf_set(notify, "DRIVING");
+              //code for rotating.
+              lf_set(motor.left_power, self->power);
+              lf_set(motor.right_power, self->power);
+            }
+            else if (drive->value == STOP)
+            {
+                lf_set_mode(STOPPED);
+                lf_set(notify, "STOPPED");
+                lf_set(motor.left_power, 0.0);
+                lf_set(motor.right_power, 0.0);
+            }
+          =}
+    }
+  }
+  
+  main reactor {
+    timer t(0, 10 msec)//response rate
+    
+    state currentState:int = 0
+    state driveCount:int = 0
+    state rotateCount:int = 0
+    robot = new Robot()
+    display = new Display()
+    distance = new AngleToDistance()
+    angle = new GyroAngle()
+
+    reaction(t) -> robot.drive, distance.trigger, angle.trigger {=
+
+       if(self->currentState == STOP && self->rotateCount < self->driveCount)
+       {
+        //rotate
+        lf_set(robot.drive,ROTATE);
+        self->rotateCount++;
+        self->currentState = ROTATE;
+       }
+       else if(self->currentState == STOP && self->driveCount < 4)
+       {
+        //moveForward
+        lf_set(robot.drive, DRIVE);
+        self->driveCount++;
+        self->currentState = DRIVE;
+       }
+       else if(self->currentState == DRIVE)
+       {
+         //check if it has to stop driving forward
+         lf_set(distance.trigger,true);
+       }
+       else if(self->currentState == ROTATE)
+       {
+         //check when it has to stop rotating
+         lf_set(angle.trigger, true);
+       }
+
+    =}
+
+        reaction(distance.right, distance.left) -> robot.drive {=
+            if((distance.right->value + distance.left->value)/2 > (self->driveCount * 0.5))
+            {
+                //we have coverd half meter distance, now stop state.
+                lf_set(robot.drive, STOP);
+            }
+        =}
+
+        reaction(angle.x) -> robot.drive {=
+            if(angle.x->value > (self->rotateCount * 90) )
+            {
+                //we have rotated 90 degree, now enter stop state.
+                lf_set(robot.drive, STOP);
+            }
+        =}
+         
+    robot.notify -> display.line0;
+  }
+  
